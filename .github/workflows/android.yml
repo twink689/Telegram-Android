@@ -1,0 +1,78 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/android.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Download source
+        uses: actions/checkout@v4
+
+      - name: Install Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK and CMake
+        run: |
+          sdkmanager "ndk;27.2.12479018" "cmake;3.22.1"
+
+      - name: Set API credentials
+        env:
+          GHOSTGRAM_API_ID: ${{ secrets.GHOSTGRAM_API_ID }}
+          GHOSTGRAM_API_HASH: ${{ secrets.GHOSTGRAM_API_HASH }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+
+          app_id = os.environ["GHOSTGRAM_API_ID"].strip()
+          app_hash = os.environ["GHOSTGRAM_API_HASH"].strip()
+
+          if not app_id.isdigit() or not app_hash:
+              raise SystemExit("API secrets are missing or invalid")
+
+          p = Path("TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java")
+          s = p.read_text()
+
+          s, n1 = re.subn(
+              r"public static int APP_ID = \d+;",
+              f"public static int APP_ID = {app_id};",
+              s, count=1
+          )
+          s, n2 = re.subn(
+              r'public static String APP_HASH = "[^"]*";',
+              f'public static String APP_HASH = "{app_hash}";',
+              s, count=1
+          )
+
+          if n1 != 1 or n2 != 1:
+              raise SystemExit("Could not update API credentials")
+          p.write_text(s)
+          PY
+
+      - name: Build APK
+        run: |
+          chmod +x gradlew
+          ./gradlew :TMessagesProj_App:assembleAfatDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-APK
+          path: TMessagesProj_App/build/outputs/apk/afat/debug/app.apk
+          if-no-files-found: error
